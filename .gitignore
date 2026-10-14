@@ -1,0 +1,7 @@
+node_modules/
+.DS_Store
+*.log
+uploads/avatars/*
+!uploads/avatars/.gitkeep
+uploads/media/*
+!uploads/media/.gitkeep
