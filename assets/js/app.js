@@ -52,7 +52,8 @@
   function describeBadReply(status, body) {
     try { console.warn('[Fan Hub] Unexpected reply from server — HTTP ' + status + ':\n' + body.slice(0, 600)); } catch (e) {}
     if (/aes\.js|slowAES|__test=|toNumbers\(/.test(body)) return 'The hosting security check expired — please reload the page (Ctrl + F5) and try again.';
-    if (status === 403 || status === 406 || /mod_security|Not Acceptable|Forbidden/i.test(body)) return 'The hosting firewall blocked this request (HTTP ' + status + '). Reload the page and try again, or rephrase your message.';
+    var said = body.replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+    if (status === 403 || status === 406 || /mod_security|Not Acceptable|Forbidden/i.test(body)) return 'The hosting server refused the chat request (HTTP ' + status + ').' + (said ? ' Server said: "' + said + '"' : '') + ' Please send a screenshot of this to the site admin.';
     if (status === 404) return 'The chat service file was not found on the server (HTTP 404) — make sure the api/ folder is uploaded.';
     if (status >= 500) return 'Server error (HTTP ' + status + '). The site admin can check the PHP error log.';
     if (!body) return 'The server sent an empty reply (HTTP ' + status + '). Please try again.';
@@ -993,6 +994,7 @@
    *  image attach (button, paste or drop), copy / read aloud, expand, Esc, ↑ to edit last,
    *  network-safe (never stuck on "typing…"), Urdu-aware voice input.
    * ================================================================ */
+  var chatEndpoint = 'api/chat.php';            // switches to 'chat-api.php' when the host blocks /api/
   var chatOpen = false, chatLoaded = false, chatBusy = false, lastUserMsg = '', chatLang = 'en', chatAbort = null, chatImage = null;
   var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
@@ -1200,22 +1202,32 @@
    * if the host still answers 403/406, retry once as a GET with the hex message in the URL.
    */
   function chatRequest(p, onDelta, signal) {
-    var hex = hexOf(p.text), attempt = function (mode) {
+    var hex = hexOf(p.text), attempt = function (mode, endpoint) {
       var params = new URLSearchParams();
       params.append('action', 'send'); params.append('stream', '1');
       if (hex) params.append('mh', hex); else params.append('message', p.text);
       if (p.regen) params.append('regen', '1');
-      var url = BASE + 'api/chat.php', init = { method: 'POST', headers: { 'X-CSRF-Token': CSRF }, credentials: 'same-origin', signal: signal };
+      var url = BASE + (endpoint || chatEndpoint), init = { method: 'POST', headers: { 'X-CSRF-Token': CSRF }, credentials: 'same-origin', signal: signal };
       if (p.image) {                               // images need multipart
         var fd = new FormData(); params.forEach(function (v, k) { fd.append(k, v); }); fd.append('image', p.image, p.image.name || 'image.png'); init.body = fd;
       } else if (mode === 'get') { init.method = 'GET'; url += '?' + params.toString(); }
       else init.body = params;
       return fetch(url, init);
     };
-    return attempt('post').then(function (r) {
-      if ((r.status === 403 || r.status === 406) && !p.image && hex.length <= 3000) return attempt('get');
-      return r;
-    }).then(function (r) {
+    // On 403/406 try, in order: same address as GET, then the root-level copy (chat-api.php) as POST and GET.
+    // Whichever works is remembered for the rest of the visit.
+    var blocked = function (r) { return r.status === 403 || r.status === 406; };
+    var plan = [['get', chatEndpoint], ['post', 'chat-api.php'], ['get', 'chat-api.php']].filter(function (s, i, a) {
+      return !(s[1] === chatEndpoint && s[0] === 'post') && !(s[0] === 'get' && (p.image || hex.length > 3000));
+    });
+    var next = function (r, i) {
+      if (!blocked(r) || i >= plan.length) return r;
+      return attempt(plan[i][0], plan[i][1]).then(function (r2) {
+        if (!blocked(r2)) { if (plan[i][1] !== chatEndpoint) chatEndpoint = plan[i][1]; return r2; }
+        return next(r2, i + 1);
+      });
+    };
+    return attempt('post').then(function (r) { return next(r, 0); }).then(function (r) {
         var ct = r.headers.get('content-type') || '';
         if (ct.indexOf('ndjson') < 0 || !r.body || !r.body.getReader) {
           if (ct.indexOf('ndjson') >= 0) return r.text().then(function (t) { return parseNd(t, onDelta); });
@@ -1316,7 +1328,11 @@
   function clearAttachment() { chatImage = null; var box = $('#chat-attach-preview'); if (box) { box.innerHTML = ''; box.classList.add('hidden'); } var f = $('#chat-file'); if (f) f.value = ''; }
 
   function loadChatHistory() {
-    fetch(BASE + 'api/chat.php?action=history', { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+    var hist = function (ep) { return fetch(BASE + ep + '?action=history', { credentials: 'same-origin' }); };
+    hist(chatEndpoint).then(function (r) {
+      if (r.status === 403 || r.status === 406) return hist('chat-api.php').then(function (r2) { if (r2.ok) chatEndpoint = 'chat-api.php'; return r2; });
+      return r;
+    }).then(function (r) { return r.json(); }).then(function (j) {
       if (j.ai) { $('#chat-mode').textContent = '· AI powered'; $('#chat-attach').classList.remove('hidden'); $('#chat-attach').classList.add('flex'); window.ORA_AI = true; }
       var h = j.history || [];
       if (!h.length) return;
@@ -1425,7 +1441,7 @@
         setBusy(false); clearAttachment();
         toast('Started a new conversation');
       };
-      post('api/chat.php', { action: 'clear' }).then(reset).catch(reset);
+      post(chatEndpoint, { action: 'clear' }).then(reset).catch(reset);
     });
     // clicks inside the panel: suggestions, quick actions, cards, feedback, retry, copy, speak, regenerate, code copy
     panel.addEventListener('click', function (e) {
@@ -1449,7 +1465,7 @@
       var fb = e.target.closest('[data-chat-fb]');
       if (fb) {
         var box = fb.parentNode, val = fb.dataset.chatFb;
-        post('api/chat.php', { action: 'feedback', id: box.dataset.chatRate, value: val }).then(function (j) {
+        post(chatEndpoint, { action: 'feedback', id: box.dataset.chatRate, value: val }).then(function (j) {
           if (!j.ok) return;
           $$('[data-chat-fb]', box).forEach(function (b) { b.classList.remove('text-emerald-400', 'text-red-400'); });
           fb.classList.add(val === '1' ? 'text-emerald-400' : 'text-red-400');
