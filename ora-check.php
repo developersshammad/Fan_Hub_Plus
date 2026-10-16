@@ -18,7 +18,23 @@ $ext  = ['curl' => function_exists('curl_init'), 'mbstring' => function_exists('
 $files = [];
 foreach (['api/ora.php', 'ora-api.php', 'includes/chatbot_engine.php', 'assets/js/app.js'] as $f) $files[$f] = is_file(__DIR__ . '/' . $f) ? date('Y-m-d H:i', filemtime(__DIR__ . '/' . $f)) . ' · ' . filesize(__DIR__ . '/' . $f) . ' bytes' : 'MISSING';
 $db = 'not tested';
-try { db()->query('SELECT 1'); $db = 'connected'; } catch (Throwable $e) { $db = 'failed'; }
+$sample = ['img' => '', 'local_img' => 'images/characters/hero1.jpg', 'video' => '', 'video_id' => 0, 'counts' => []];
+try {
+    db()->query('SELECT 1'); $db = 'connected';
+    $sample['img'] = (string)q_val("SELECT image FROM contents WHERE status='published' AND image LIKE 'http%' ORDER BY content_id LIMIT 1");
+    $v = q_one("SELECT content_id, media_url FROM contents WHERE status='published' AND type IN ('video','trailer') AND media_url <> '' ORDER BY content_id LIMIT 1");
+    if ($v) { $sample['video'] = media_src($v['media_url']); $sample['video_id'] = (int)$v['content_id']; }
+    $sample['counts'] = [
+        'published content' => (int)q_val("SELECT COUNT(*) FROM contents WHERE status='published'"),
+        'content without image' => (int)q_val("SELECT COUNT(*) FROM contents WHERE status='published' AND (image IS NULL OR image='')"),
+        'videos/audio without media file' => (int)q_val("SELECT COUNT(*) FROM contents WHERE status='published' AND type IN ('video','trailer','audio') AND (media_url IS NULL OR media_url='')"),
+    ];
+} catch (Throwable $e) { $db = 'failed'; }
+$mediaDir = [];
+foreach (['assets/media/video', 'assets/media/audio', 'images/characters', 'uploads/media'] as $d) {
+    $list = is_dir(__DIR__ . '/' . $d) ? array_values(array_diff(scandir(__DIR__ . '/' . $d), ['.', '..', '.gitkeep', '.htaccess'])) : null;
+    $mediaDir[$d] = $list === null ? 'MISSING folder' : count($list) . ' files';
+}
 ?><!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ORA Chat Check</title>
@@ -38,6 +54,14 @@ try { db()->query('SELECT 1'); $db = 'connected'; } catch (Throwable $e) { $db =
     <tr><th>Extensions</th><td><?php foreach ($ext as $k => $v) echo '<span class="' . ($v ? 'ok' : 'bad') . '">' . $k . '</span> &nbsp; '; ?></td></tr>
     <tr><th>Database</th><td class="<?= $db === 'connected' ? 'ok' : 'bad' ?>"><?= $db ?></td></tr>
     <?php foreach ($files as $f => $info) echo '<tr><th><code>' . $f . '</code></th><td class="' . ($info === 'MISSING' ? 'bad' : '') . '">' . htmlspecialchars($info) . '</td></tr>'; ?>
+  </table></div>
+  <div class="card"><table>
+    <tr><th colspan="2">Media</th></tr>
+    <?php foreach ($mediaDir as $d => $info) echo '<tr><th><code>' . $d . '/</code></th><td class="' . (strpos($info, 'MISSING') !== false || ($info === '0 files' && $d !== 'uploads/media') ? 'bad' : '') . '">' . htmlspecialchars($info) . '</td></tr>'; ?>
+    <?php foreach ($sample['counts'] as $k => $n) echo '<tr><th>' . htmlspecialchars($k) . '</th><td>' . $n . '</td></tr>'; ?>
+    <tr><th>Image from internet (Pexels)</th><td><img id="m-ext" src="<?= htmlspecialchars($sample['img']) ?>" alt="" style="height:44px;border-radius:6px;vertical-align:middle"> <span id="m-ext-r">checking…</span></td></tr>
+    <tr><th>Image from this site</th><td><img id="m-loc" src="<?= htmlspecialchars(media($sample['local_img'])) ?>" alt="" style="height:44px;border-radius:6px;vertical-align:middle"> <span id="m-loc-r">checking…</span></td></tr>
+    <tr><th>Video file</th><td><code><?= htmlspecialchars($sample['video'] ?: '—') ?></code> <span id="m-vid-r">checking…</span></td></tr>
   </table></div>
   <div class="card"><p class="sum" id="sum">Running tests…</p><table id="t"><tr><th>#</th><th>Request</th><th>HTTP</th><th>Result</th></tr></table></div>
   <div><button id="again" type="button">Run again</button></div>
@@ -61,7 +85,9 @@ try { db()->query('SELECT 1'); $db = 'connected'; } catch (Throwable $e) { $db =
     ['GET ora-api.php history', 'ora-api.php?action=history', {}],
     ['POST api/ora.php send "hello"', 'api/ora.php', { method: 'POST', headers: { 'X-CSRF-Token': CSRF }, body: form({ action: 'send', message: 'hello' }) }],
     ['POST api/ora.php send (hex, apostrophe)', 'api/ora.php', { method: 'POST', headers: { 'X-CSRF-Token': CSRF }, body: form({ action: 'send', mh: hex }) }],
-    ['POST ora-api.php send (hex)', 'ora-api.php', { method: 'POST', headers: { 'X-CSRF-Token': CSRF }, body: form({ action: 'send', mh: hex }) }]
+    ['POST ora-api.php send (hex)', 'ora-api.php', { method: 'POST', headers: { 'X-CSRF-Token': CSRF }, body: form({ action: 'send', mh: hex }) }],
+    ['GET api/fragment.php (video popup)', 'api/fragment.php?view=media&id=<?= (int)$sample['video_id'] ?>', {}, 'html'],
+    ['GET api/search.php (search results)', 'api/search.php?q=', {}, 'html']
   ];
   function run() {
     var t = document.getElementById('t'); while (t.rows.length > 1) t.deleteRow(1);
@@ -73,7 +99,8 @@ try { db()->query('SELECT 1'); $db = 'connected'; } catch (Throwable $e) { $db =
         return fetch(x[1], init).then(function (r) {
           return r.text().then(function (body) {
             var j = null; try { j = JSON.parse(body); } catch (e) {}
-            var ok = r.status < 400 && j && typeof j === 'object';
+            var ok = x[3] === 'html' ? (r.status < 400 && body.length > 50 && !/403 Forbidden/i.test(body)) : (r.status < 400 && j && typeof j === 'object');
+            if (x[3] === 'html' && ok) { var imgs = (body.match(/<img/g) || []).length, vids = (body.match(/<(video|audio)/g) || []).length; return { status: r.status, ok: true, note: 'OK — ' + imgs + ' images, ' + vids + ' video/audio tags' }; }
             var note = ok ? (j.ok === false && j.error ? 'reached PHP: ' + j.error : 'OK') : body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 90);
             return { status: r.status, ok: ok, note: note };
           });
@@ -87,6 +114,25 @@ try { db()->query('SELECT 1'); $db = 'connected'; } catch (Throwable $e) { $db =
     });
     chain.then(function () { document.getElementById('sum').textContent = pass + ' of ' + tests.length + ' passed' + (fail.length ? ' — blocked: #' + fail.join(', #') : ' — the host allows everything the chat needs.'); });
   }
+  // media checks
+  function imgCheck(id) {
+    var im = document.getElementById(id), out = document.getElementById(id + '-r');
+    var done = function () { if (!im.getAttribute('src')) { out.textContent = '— no image URL in database'; out.className = 'bad'; return; }
+      var ok = im.complete && im.naturalWidth > 0; out.textContent = ok ? '✔ loads' : '✘ does not load'; out.className = ok ? 'ok' : 'bad'; };
+    if (im.complete) done(); else { im.addEventListener('load', done); im.addEventListener('error', done); }
+  }
+  imgCheck('m-ext'); imgCheck('m-loc');
+  (function () {
+    var out = document.getElementById('m-vid-r'), url = <?= json_encode($sample['video']) ?>;
+    if (!url) { out.textContent = '— no video in database'; out.className = 'bad'; return; }
+    if (/^https?:/.test(url) && url.indexOf(location.host) < 0) { out.textContent = '(external link)'; return; }
+    fetch(url, { method: 'HEAD', cache: 'no-store' }).then(function (r) {
+      var t = r.headers.get('content-type') || '';
+      var ok = r.ok && /video|audio|octet/.test(t);
+      out.textContent = (ok ? '✔ ' : '✘ ') + 'HTTP ' + r.status + ' · ' + (t || 'no type') + (r.headers.get('content-length') ? ' · ' + Math.round(r.headers.get('content-length') / 1024) + ' KB' : '');
+      out.className = ok ? 'ok' : 'bad';
+    }).catch(function (e) { out.textContent = '✘ ' + e.message; out.className = 'bad'; });
+  })();
   document.getElementById('again').onclick = run;
   run();
 })();
