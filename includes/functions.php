@@ -4,6 +4,10 @@
  */
 require_once __DIR__ . '/config.php';
 
+if (!function_exists('str_starts_with')) { function str_starts_with(string $h, string $n): bool { return $n === '' || strncmp($h, $n, strlen($n)) === 0; } }
+if (!function_exists('str_ends_with'))   { function str_ends_with(string $h, string $n): bool { return $n === '' || substr($h, -strlen($n)) === $n; } }
+if (!function_exists('str_contains'))    { function str_contains(string $h, string $n): bool { return $n === '' || strpos($h, $n) !== false; } }
+
 /* ------------------------------------------------------------------ *
  *  Session (secure cookie flags)
  * ------------------------------------------------------------------ */
@@ -36,6 +40,11 @@ function db(): PDO
             // keep MySQL NOW() in sync with PHP's timezone (Asia/Karachi)
             $pdo->exec("SET time_zone = '" . date('P') . "'");
         } catch (PDOException $ex) {
+            error_log('Fan Hub DB connection failed: ' . $ex->getMessage());
+            // API calls (chat, search, bookmarks…) need JSON, not an HTML page
+            if (strpos(str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? ''), '/api/') !== false) {
+                json_out(['ok' => false, 'error' => 'The site could not reach its database. The admin should check the DB settings in includes/config.php.'], 500);
+            }
             http_response_code(500);
             echo '<div style="font-family:sans-serif;padding:40px;background:#050508;color:#fff;min-height:100vh">'
                . '<h2>Database connection failed</h2><p>Please import <code>database/fanhub_plus.sql</code> '
@@ -89,9 +98,16 @@ function icon(string $name, int $size = 24, string $class = '', array $attrs = [
 
 function json_out(array $data, int $code = 200): void
 {
-    http_response_code($code);
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    // drop any stray output (PHP notices, BOMs, host-injected text) so the browser always gets clean JSON
+    while (ob_get_level() > 0) @ob_end_clean();
+    if (!headers_sent()) {
+        http_response_code($code);
+        header('Content-Type: application/json; charset=utf-8');
+        header('Cache-Control: no-store');
+    }
+    // INVALID_UTF8_SUBSTITUTE: a badly encoded DB string must never turn the whole reply into an empty response
+    $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+    echo $json !== false ? $json : '{"ok":false,"error":"The server could not encode its reply."}';
     exit;
 }
 

@@ -29,13 +29,37 @@
     if (!(data instanceof FormData) && data) Object.keys(data).forEach(function (k) { fd.append(k, data[k]); });
     return fetch(BASE + path, { method: 'POST', headers: { 'X-CSRF-Token': CSRF }, body: fd, credentials: 'same-origin' })
       .then(function (r) {
-        return r.json().catch(function () { return { ok: false, error: 'Unexpected server response.' }; }).then(function (j) {
+        return readJson(r).then(function (j) {
           if (r.status === 401 && j.auth) { openAuth('login'); toast(j.error || 'Please sign in first.'); }
           return j;
         });
       })
       .catch(function () { return { ok: false, error: 'Network error — please try again.' }; });
   }
+
+  /** Parse a JSON reply; when the server sent something else, say what actually happened */
+  function readJson(r) {
+    return r.text().then(function (t) {
+      var body = t.replace(/^\uFEFF/, '').trim(), j = null;
+      try { j = JSON.parse(body); } catch (e) {
+        var m = body.match(/\{[\s\S]*"ok"\s*:[\s\S]*\}\s*$/);            // JSON with junk printed before it
+        if (m) { try { j = JSON.parse(m[0]); } catch (e2) {} }
+      }
+      if (j && typeof j === 'object') return j;
+      return { ok: false, error: describeBadReply(r.status, body) };
+    });
+  }
+  function describeBadReply(status, body) {
+    try { console.warn('[Fan Hub] Unexpected reply from server — HTTP ' + status + ':\n' + body.slice(0, 600)); } catch (e) {}
+    if (/aes\.js|slowAES|__test=|toNumbers\(/.test(body)) return 'The hosting security check expired — please reload the page (Ctrl + F5) and try again.';
+    if (status === 403 || status === 406 || /mod_security|Not Acceptable|Forbidden/i.test(body)) return 'The hosting firewall blocked this request (HTTP ' + status + '). Reload the page and try again, or rephrase your message.';
+    if (status === 404) return 'The chat service file was not found on the server (HTTP 404) — make sure the api/ folder is uploaded.';
+    if (status >= 500) return 'Server error (HTTP ' + status + '). The site admin can check the PHP error log.';
+    if (!body) return 'The server sent an empty reply (HTTP ' + status + '). Please try again.';
+    return 'Unexpected server response (HTTP ' + status + ').';
+  }
+  /** UTF-8 safe base64 — lets messages with quotes, code or SQL pass hosting firewalls */
+  function b64(s) { try { return btoa(unescape(encodeURIComponent(s))); } catch (e) { return ''; } }
 
   function getHTML(path) {
     return fetch(BASE + path, { credentials: 'same-origin' }).then(function (r) { return r.ok ? r.text() : Promise.reject(r.status); });
@@ -1172,7 +1196,7 @@
         var ct = r.headers.get('content-type') || '';
         if (ct.indexOf('ndjson') < 0 || !r.body || !r.body.getReader) {
           if (ct.indexOf('ndjson') >= 0) return r.text().then(function (t) { return parseNd(t, onDelta); });
-          return r.json().catch(function () { return { ok: false, error: 'Unexpected server response.' }; });
+          return readJson(r);
         }
         var reader = r.body.getReader(), dec = new TextDecoder(), buf = '', final = null;
         var pump = function () {
@@ -1211,7 +1235,9 @@
     setBusy(true);
     typing(true);
     var fd = new FormData();
-    fd.append('action', 'send'); fd.append('stream', '1'); fd.append('message', text);
+    fd.append('action', 'send'); fd.append('stream', '1');
+    var enc = b64(text);
+    if (enc) fd.append('m64', enc); else fd.append('message', text);
     if (img) fd.append('image', img, img.name || 'image.png');
     if (opts.regen) fd.append('regen', '1');
     chatAbort = window.AbortController ? new AbortController() : null;
@@ -1236,7 +1262,7 @@
           bubble.classList.remove('chat-typing-caret'); paint();
           finishBot(row, { tools: true, retry: true, note: (j && j.error) || 'The answer was interrupted.' }); end();
         } else {
-          addMsg('bot', (j && j.error) || 'ORA is offline right now.', { error: true, retry: true, instant: true }); end();
+          addMsg('bot', (j && j.error) || 'ORA is offline right now.', { error: true, retry: true, instant: true, note: j && j.detail ? 'Details (admins only): ' + j.detail : '' }); end();
         }
       };
       // rule answers are instant — keep a short, natural "typing" beat

@@ -10,6 +10,24 @@
  *   POST action=feedback id= value=1|0   thumbs up / down on an answer
  *   POST action=clear               start a fresh conversation (history kept for admin analytics)
  */
+// Always answer in JSON — even when PHP hits a fatal error. Shared hosts (InfinityFree etc.) would otherwise
+// send an HTML error page, which the chat shows as "Unexpected server response".
+@ini_set('display_errors', '0');
+ob_start();
+register_shutdown_function(function () {
+    $e = error_get_last();
+    if (!$e || !in_array($e['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR], true)) return;
+    while (ob_get_level() > 0) @ob_end_clean();
+    error_log('ORA fatal: ' . $e['message'] . ' in ' . $e['file'] . ':' . $e['line']);
+    $admin = false;
+    try { $admin = function_exists('is_admin') && is_admin(); } catch (Throwable $x) {}
+    if (!headers_sent()) { http_response_code(500); header('Content-Type: application/json; charset=utf-8'); }
+    $out = ['ok' => false, 'error' => 'ORA hit a server error. Please try again in a moment.'];
+    // the exact cause is shown to admins only (it can contain file paths or database names)
+    if ($admin) $out['detail'] = basename($e['file']) . ':' . $e['line'] . ' — ' . mb_substr(preg_replace('/\s+/', ' ', $e['message']), 0, 300);
+    echo json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+});
+
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/chatbot_engine.php';
 ensure_schema();
@@ -53,6 +71,12 @@ if ($action === 'feedback') {
 }
 
 /* ---- send ---- */
+// The browser sends the message base64-encoded (m64) so hosting firewalls (mod_security) don't block
+// ordinary text that merely looks like code or SQL — apostrophes, <tags>, "SELECT … FROM", etc.
+if (isset($_POST['m64']) && $_POST['m64'] !== '') {
+    $dec = base64_decode(strtr((string)$_POST['m64'], ' ', '+'), true);
+    if ($dec !== false && mb_check_encoding($dec, 'UTF-8')) $_POST['message'] = $dec;
+}
 $msg = trim(preg_replace('/[ \t]+/u', ' ', str_replace("\r", '', (string)($_POST['message'] ?? ''))));
 $msg = mb_substr($msg, 0, 4000);
 
@@ -107,7 +131,7 @@ if ($stream) {
     @ini_set('zlib.output_compression', '0');
     @ini_set('output_buffering', '0');
     @ini_set('implicit_flush', '1');
-    while (ob_get_level() > 0) @ob_end_flush();
+    while (ob_get_level() > 0) @ob_end_clean();     // discard stray output, then stream
     header('Content-Type: application/x-ndjson; charset=utf-8');
     header('Cache-Control: no-cache, no-transform');
     header('X-Accel-Buffering: no');
@@ -116,7 +140,7 @@ if ($stream) {
 }
 $emit = function (array $line) use ($stream) {
     if (!$stream) return;
-    echo json_encode($line, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), "\n";
+    echo json_encode($line, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE), "\n";
     @flush();
 };
 $emit(['t' => 'start']);
