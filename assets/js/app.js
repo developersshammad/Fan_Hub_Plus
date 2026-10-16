@@ -1190,9 +1190,32 @@
   }
 
   /** POST to api/chat.php; AI answers arrive as NDJSON lines and are handed to onDelta as they stream */
-  function chatRequest(fd, onDelta, signal) {
-    return fetch(BASE + 'api/chat.php', { method: 'POST', headers: { 'X-CSRF-Token': CSRF, 'Accept': 'application/x-ndjson, application/json' }, body: fd, credentials: 'same-origin', signal: signal })
-      .then(function (r) {
+  /** UTF-8 → hex: only 0-9a-f, so hosting firewalls have nothing in the message to object to */
+  function hexOf(s) {
+    try { var b = new TextEncoder().encode(s), h = ''; for (var i = 0; i < b.length; i++) h += (b[i] < 16 ? '0' : '') + b[i].toString(16); return h; }
+    catch (e) { return ''; }
+  }
+  /**
+   * Send a chat message. Plain urlencoded POST first (the request shape shared-host firewalls like best);
+   * if the host still answers 403/406, retry once as a GET with the hex message in the URL.
+   */
+  function chatRequest(p, onDelta, signal) {
+    var hex = hexOf(p.text), attempt = function (mode) {
+      var params = new URLSearchParams();
+      params.append('action', 'send'); params.append('stream', '1');
+      if (hex) params.append('mh', hex); else params.append('message', p.text);
+      if (p.regen) params.append('regen', '1');
+      var url = BASE + 'api/chat.php', init = { method: 'POST', headers: { 'X-CSRF-Token': CSRF }, credentials: 'same-origin', signal: signal };
+      if (p.image) {                               // images need multipart
+        var fd = new FormData(); params.forEach(function (v, k) { fd.append(k, v); }); fd.append('image', p.image, p.image.name || 'image.png'); init.body = fd;
+      } else if (mode === 'get') { init.method = 'GET'; url += '?' + params.toString(); }
+      else init.body = params;
+      return fetch(url, init);
+    };
+    return attempt('post').then(function (r) {
+      if ((r.status === 403 || r.status === 406) && !p.image && hex.length <= 3000) return attempt('get');
+      return r;
+    }).then(function (r) {
         var ct = r.headers.get('content-type') || '';
         if (ct.indexOf('ndjson') < 0 || !r.body || !r.body.getReader) {
           if (ct.indexOf('ndjson') >= 0) return r.text().then(function (t) { return parseNd(t, onDelta); });
@@ -1234,12 +1257,7 @@
     setChatActions([]);
     setBusy(true);
     typing(true);
-    var fd = new FormData();
-    fd.append('action', 'send'); fd.append('stream', '1');
-    var enc = b64(text);
-    if (enc) fd.append('m64', enc); else fd.append('message', text);
-    if (img) fd.append('image', img, img.name || 'image.png');
-    if (opts.regen) fd.append('regen', '1');
+    var req = { text: text, image: img, regen: !!opts.regen };
     chatAbort = window.AbortController ? new AbortController() : null;
     var row = null, bubble = null, acc = '', raf = 0, started = Date.now();
     var paint = function () { raf = 0; if (!bubble) return; bubble.innerHTML = fmtChat(acc); bubble.dataset.raw = acc; if (nearBottom()) $('#chat-messages').scrollTop = 1e9; };
@@ -1249,7 +1267,7 @@
       if (!raf) raf = requestAnimationFrame(paint);
     };
     var end = function () { setBusy(false); chatAbort = null; var st = $('#chat-status'); if (st) st.textContent = 'Online'; };
-    chatRequest(fd, onDelta, chatAbort && chatAbort.signal).then(function (j) {
+    chatRequest(req, onDelta, chatAbort && chatAbort.signal).then(function (j) {
       var finish = function () {
         typing(false);
         if (j && j.ok) {

@@ -53,7 +53,14 @@ if ($action === 'history') {
     json_out(['ok' => true, 'history' => $out, 'ai' => $ai, 'aiLabel' => $ai ? ora_ai_config()['label'] : '']);
 }
 
-require_post_csrf_json();
+// Sending normally uses POST; some shared hosts' firewalls reject that, so the widget may retry the same
+// request as a GET (hex-encoded message). The CSRF header is required either way.
+if ($action === 'send' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+    if (!csrf_valid()) json_out(['ok' => false, 'error' => 'Your session expired. Please refresh the page.'], 419);
+    $_POST = array_merge($_POST, array_intersect_key($_GET, array_flip(['message', 'mh', 'm64', 'stream', 'regen'])));
+} else {
+    require_post_csrf_json();
+}
 
 if ($action === 'clear') {
     $_SESSION['chat_cleared_after'] = (int)q_val('SELECT COALESCE(MAX(query_id),0) FROM chatbot_queries');
@@ -71,9 +78,12 @@ if ($action === 'feedback') {
 }
 
 /* ---- send ---- */
-// The browser sends the message base64-encoded (m64) so hosting firewalls (mod_security) don't block
+// The browser sends the message hex-encoded (mh; older versions: base64 m64) so hosting firewalls (mod_security) don't block
 // ordinary text that merely looks like code or SQL — apostrophes, <tags>, "SELECT … FROM", etc.
-if (isset($_POST['m64']) && $_POST['m64'] !== '') {
+if (isset($_POST['mh']) && is_string($_POST['mh']) && $_POST['mh'] !== '' && strlen($_POST['mh']) % 2 === 0 && ctype_xdigit($_POST['mh'])) {
+    $dec = hex2bin($_POST['mh']);
+    if ($dec !== false && mb_check_encoding($dec, 'UTF-8')) $_POST['message'] = $dec;
+} elseif (isset($_POST['m64']) && $_POST['m64'] !== '') {
     $dec = base64_decode(strtr((string)$_POST['m64'], ' ', '+'), true);
     if ($dec !== false && mb_check_encoding($dec, 'UTF-8')) $_POST['message'] = $dec;
 }
