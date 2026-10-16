@@ -1,6 +1,6 @@
 <?php
 require_once __DIR__ . '/../chatbot_engine.php';
-/* ORA chatbot widget — answers from api/chat.php (knowledge base + live site data, optional AI). Expects $chatSuggestions */
+/* ORA chatbot widget — answers from api/ora.php (knowledge base + live site data, optional AI). Expects $chatSuggestions */
 $botName = setting('chatbot_name', 'ORA');
 $defaultWelcome = "Hey, I'm ORA — your Fandom Universe guide. Ask me about characters, trending content, events, merch or recommendations.";
 $welcome = setting('chatbot_welcome', $defaultWelcome);

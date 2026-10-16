@@ -988,13 +988,15 @@
   }
 
   /* ================================================================ *
-   *  ORA chatbot v3 — api/chat.php
+   *  ORA chatbot v3 — api/ora.php
    *  Instant site answers (cards + quick actions) and full AI answers for anything else:
    *  live streaming, Markdown (headings, lists, tables, code with copy), Stop, Regenerate,
    *  image attach (button, paste or drop), copy / read aloud, expand, Esc, ↑ to edit last,
    *  network-safe (never stuck on "typing…"), Urdu-aware voice input.
    * ================================================================ */
-  var chatEndpoint = 'api/chat.php';            // switches to 'chat-api.php' when the host blocks /api/
+  // The API lives at api/ora.php — no "chat" in the URL, because some free hosts (InfinityFree) block such
+  // addresses with 403. If /api/ itself is blocked the widget switches to ora-api.php at the site root.
+  var chatEndpoint = 'api/ora.php';
   var chatOpen = false, chatLoaded = false, chatBusy = false, lastUserMsg = '', chatLang = 'en', chatAbort = null, chatImage = null;
   var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
@@ -1191,7 +1193,7 @@
     $('.chat-stop-icon', b).classList.toggle('hidden', !on);
   }
 
-  /** POST to api/chat.php; AI answers arrive as NDJSON lines and are handed to onDelta as they stream */
+  /** POST to api/ora.php; AI answers arrive as NDJSON lines and are handed to onDelta as they stream */
   /** UTF-8 → hex: only 0-9a-f, so hosting firewalls have nothing in the message to object to */
   function hexOf(s) {
     try { var b = new TextEncoder().encode(s), h = ''; for (var i = 0; i < b.length; i++) h += (b[i] < 16 ? '0' : '') + b[i].toString(16); return h; }
@@ -1214,10 +1216,10 @@
       else init.body = params;
       return fetch(url, init);
     };
-    // On 403/406 try, in order: same address as GET, then the root-level copy (chat-api.php) as POST and GET.
+    // On 403/406 try, in order: same address as GET, then the root-level copy (ora-api.php) as POST and GET.
     // Whichever works is remembered for the rest of the visit.
     var blocked = function (r) { return r.status === 403 || r.status === 406; };
-    var plan = [['get', chatEndpoint], ['post', 'chat-api.php'], ['get', 'chat-api.php']].filter(function (s, i, a) {
+    var plan = [['get', chatEndpoint], ['post', 'ora-api.php'], ['get', 'ora-api.php']].filter(function (s, i, a) {
       return !(s[1] === chatEndpoint && s[0] === 'post') && !(s[0] === 'get' && (p.image || hex.length > 3000));
     });
     var next = function (r, i) {
@@ -1330,7 +1332,7 @@
   function loadChatHistory() {
     var hist = function (ep) { return fetch(BASE + ep + '?action=history', { credentials: 'same-origin' }); };
     hist(chatEndpoint).then(function (r) {
-      if (r.status === 403 || r.status === 406) return hist('chat-api.php').then(function (r2) { if (r2.ok) chatEndpoint = 'chat-api.php'; return r2; });
+      if (r.status === 403 || r.status === 406) return hist('ora-api.php').then(function (r2) { if (r2.ok) chatEndpoint = 'ora-api.php'; return r2; });
       return r;
     }).then(function (r) { return r.json(); }).then(function (j) {
       if (j.ai) { $('#chat-mode').textContent = '· AI powered'; $('#chat-attach').classList.remove('hidden'); $('#chat-attach').classList.add('flex'); window.ORA_AI = true; }

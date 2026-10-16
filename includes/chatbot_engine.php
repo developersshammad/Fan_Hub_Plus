@@ -866,7 +866,7 @@ function ora_reply(string $msg, ?array $user): array
         }
     }
 
-    /* ---------- 21. AI mode takes over from here (see ora_is_sure + api/chat.php) ---------- */
+    /* ---------- 21. AI mode takes over from here (see ora_is_sure + api/ora.php) ---------- */
 
     /* ---------- 22. "Did you mean…?" fallback ---------- */
     $vocab = [];

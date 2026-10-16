@@ -16,7 +16,7 @@ $csrf = csrf_token();
 $php  = PHP_VERSION;
 $ext  = ['curl' => function_exists('curl_init'), 'mbstring' => function_exists('mb_strlen'), 'pdo_mysql' => extension_loaded('pdo_mysql'), 'fileinfo' => function_exists('finfo_open')];
 $files = [];
-foreach (['api/chat.php', 'chat-api.php', 'includes/chatbot_engine.php', 'assets/js/app.js'] as $f) $files[$f] = is_file(__DIR__ . '/' . $f) ? date('Y-m-d H:i', filemtime(__DIR__ . '/' . $f)) . ' · ' . filesize(__DIR__ . '/' . $f) . ' bytes' : 'MISSING';
+foreach (['api/ora.php', 'ora-api.php', 'includes/chatbot_engine.php', 'assets/js/app.js'] as $f) $files[$f] = is_file(__DIR__ . '/' . $f) ? date('Y-m-d H:i', filemtime(__DIR__ . '/' . $f)) . ' · ' . filesize(__DIR__ . '/' . $f) . ' bytes' : 'MISSING';
 $db = 'not tested';
 try { db()->query('SELECT 1'); $db = 'connected'; } catch (Throwable $e) { $db = 'failed'; }
 ?><!doctype html>
@@ -57,11 +57,11 @@ try { db()->query('SELECT 1'); $db = 'connected'; } catch (Throwable $e) { $db =
     ['POST field mh=<hex text>', 'ora-check.php', { method: 'POST', body: form({ t: 'ping', mh: hex }) }],
     ['POST message=hello', 'ora-check.php', { method: 'POST', body: form({ t: 'ping', message: 'hello' }) }],
     ["POST message with apostrophe", 'ora-check.php', { method: 'POST', body: form({ t: 'ping', message: "What's trending in anime this week?" }) }],
-    ['GET api/chat.php history', 'api/chat.php?action=history', {}],
-    ['GET chat-api.php history', 'chat-api.php?action=history', {}],
-    ['POST api/chat.php send "hello"', 'api/chat.php', { method: 'POST', headers: { 'X-CSRF-Token': CSRF }, body: form({ action: 'send', message: 'hello' }) }],
-    ['POST chat-api.php send "hello"', 'chat-api.php', { method: 'POST', headers: { 'X-CSRF-Token': CSRF }, body: form({ action: 'send', message: 'hello' }) }],
-    ['POST chat-api.php send (hex)', 'chat-api.php', { method: 'POST', headers: { 'X-CSRF-Token': CSRF }, body: form({ action: 'send', mh: hex }) }]
+    ['GET api/ora.php history', 'api/ora.php?action=history', {}],
+    ['GET ora-api.php history', 'ora-api.php?action=history', {}],
+    ['POST api/ora.php send "hello"', 'api/ora.php', { method: 'POST', headers: { 'X-CSRF-Token': CSRF }, body: form({ action: 'send', message: 'hello' }) }],
+    ['POST api/ora.php send (hex, apostrophe)', 'api/ora.php', { method: 'POST', headers: { 'X-CSRF-Token': CSRF }, body: form({ action: 'send', mh: hex }) }],
+    ['POST ora-api.php send (hex)', 'ora-api.php', { method: 'POST', headers: { 'X-CSRF-Token': CSRF }, body: form({ action: 'send', mh: hex }) }]
   ];
   function run() {
     var t = document.getElementById('t'); while (t.rows.length > 1) t.deleteRow(1);
